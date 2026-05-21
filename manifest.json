@@ -1,0 +1,9 @@
+{
+  "id": "civil-service-dashboard",
+  "name": "考公工作台",
+  "version": "0.1.0",
+  "minAppVersion": "0.15.0",
+  "description": "面向考公备考的 Obsidian 卡片式日计划、做题记录和复盘工作台。",
+  "author": "zgk",
+  "isDesktopOnly": false
+}
