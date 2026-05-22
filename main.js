@@ -11,30 +11,27 @@ const DEFAULT_PLAN_TEMPLATE = [
 ];
 
 function createDefaultDailyData(date, planTemplate = DEFAULT_PLAN_TEMPLATE) {
+  const plan = createPlanFromTemplate(planTemplate);
   return {
     date,
-    plan: createPlanFromTemplate(planTemplate),
+    plan,
     practice: {
-      xingceTotal: "0",
-      xingceCorrect: "0",
-      accuracy: "0%",
-      shenlun: "",
-      studyTime: "",
-      mistakeLink: "",
+      items: syncPracticeItems(plan),
+      mistakeLink: buildMistakeLink(date),
     },
     review: "",
   };
 }
 
 function renderDailyMarkdown(data) {
+  const plan = Array.isArray(data.plan) ? data.plan : [];
   const practice = {
     ...createDefaultDailyData(data.date).practice,
     ...data.practice,
   };
-  practice.accuracy = calculateAccuracy(practice.xingceTotal, practice.xingceCorrect);
+  practice.items = syncPracticeItems(plan, practice.items);
 
   const lines = [`# 考公日记 ${data.date}`, "", "## 本日计划", ""];
-  const plan = Array.isArray(data.plan) ? data.plan : [];
   if (plan.length === 0) {
     lines.push("- [ ] ");
   } else {
@@ -47,14 +44,21 @@ function renderDailyMarkdown(data) {
     "",
     "## 本日做题情况",
     "",
-    "| 项目 | 内容 |",
-    "| --- | --- |",
-    `| 行测题数 | ${escapeTableCell(practice.xingceTotal)} |`,
-    `| 正确数 | ${escapeTableCell(practice.xingceCorrect)} |`,
-    `| 正确率 | ${escapeTableCell(practice.accuracy)} |`,
-    `| 申论练习 | ${escapeTableCell(practice.shenlun)} |`,
-    `| 学习时长 | ${escapeTableCell(practice.studyTime)} |`,
-    `| 错题链接 | ${escapeTableCell(practice.mistakeLink)} |`,
+    "| 项目 | 总题数 | 正确数 | 正确率 | 用时 | 错题 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...practice.items.map((item, index) => {
+      const section = buildMistakeSections(plan)[index];
+      const mistakeLink = section ? buildPlanMistakeLink(data.date, section.title) : "";
+      return [
+        "",
+        item.text,
+        item.total,
+        item.correct,
+        item.accuracy,
+        item.duration,
+        mistakeLink,
+      ].map(escapeTableCell).join(" | ").replace(/^ \| /, "| ") + " |";
+    }),
     "",
     "## 复盘",
     "",
@@ -67,13 +71,18 @@ function renderDailyMarkdown(data) {
 
 function parseDailyMarkdown(markdown, fallbackDate) {
   const data = createDefaultDailyData(extractDate(markdown) || fallbackDate);
-  const parsedPlan = parsePlan(extractSection(markdown, "本日计划"));
+  const planSection = extractSection(markdown, "本日计划");
+  const practiceSection = extractSection(markdown, "本日做题情况");
+  const parsedPlan = parsePlan(planSection);
   if (parsedPlan.length > 0) data.plan = parsedPlan;
   data.practice = {
     ...data.practice,
-    ...parsePractice(extractSection(markdown, "本日做题情况")),
+    ...parsePractice(practiceSection, data.plan, data.date),
   };
-  data.practice.accuracy = calculateAccuracy(data.practice.xingceTotal, data.practice.xingceCorrect);
+  if (!String(data.practice.mistakeLink || "").trim()) {
+    data.practice.mistakeLink = buildMistakeLink(data.date);
+  }
+  data.practice.items = syncPracticeItems(data.plan, data.practice.items);
   data.review = extractSection(markdown, "复盘").trim();
   return data;
 }
@@ -106,6 +115,33 @@ function calculateAccuracy(totalValue, correctValue) {
   return `${Math.max(0, Math.min(100, value))}%`;
 }
 
+function calculatePracticeSummary(items) {
+  const list = Array.isArray(items) ? items : [];
+  const total = list.reduce((sum, item) => sum + parseNumber(item && item.total), 0);
+  const correct = list.reduce((sum, item) => sum + parseNumber(item && item.correct), 0);
+  return {
+    total,
+    correct,
+    accuracy: calculateAccuracy(String(total), String(correct)),
+  };
+}
+
+function syncPracticeItems(plan, items = []) {
+  const sourceItems = Array.isArray(items) ? items : [];
+  return (Array.isArray(plan) ? plan : []).map((task, index) => {
+    const previous = sourceItems[index] || {};
+    const total = stringValue(previous.total);
+    const correct = stringValue(previous.correct);
+    return {
+      text: stringValue(task && task.text),
+      total,
+      correct,
+      accuracy: calculateAccuracy(total, correct),
+      duration: stringValue(previous.duration),
+    };
+  });
+}
+
 function normalizePlanTemplate(planTemplate) {
   const source = Array.isArray(planTemplate) ? planTemplate : DEFAULT_PLAN_TEMPLATE;
   const normalized = source
@@ -132,17 +168,34 @@ function buildMistakeLink(date) {
   return `[[${MISTAKE_FOLDER}/${date}]]`;
 }
 
-function renderMistakeMarkdown(date) {
+function buildPlanMistakeLink(date, sectionTitle) {
+  return `[[${MISTAKE_FOLDER}/${date}#${sectionTitle}]]`;
+}
+
+function renderMistakeMarkdown(date, plan = []) {
+  return ensureMistakePlanSections(renderMistakeBase(date), date, plan);
+}
+
+function ensureMistakePlanSections(markdown, date, plan = []) {
+  const source = markdown || renderMistakeBase(date);
+  const sections = buildMistakeSections(plan).filter((section) => !hasHeading(source, section.title));
+  if (sections.length === 0) return source;
+
+  const sectionText = sections.map((section) => renderMistakeSection(section.title)).join("\n");
+  const lines = source.split(/\r?\n/);
+  const reviewIndex = lines.findIndex((line) => line.trim() === "## 回看");
+  if (reviewIndex === -1) {
+    return `${source.replace(/\s*$/, "\n\n")}${sectionText}`;
+  }
+
+  const before = lines.slice(0, reviewIndex).join("\n").replace(/\s*$/, "");
+  const after = lines.slice(reviewIndex).join("\n").replace(/^\s*/, "");
+  return `${before}\n\n${sectionText}\n${after}`.replace(/\s*$/, "\n");
+}
+
+function renderMistakeBase(date) {
   return [
     `# 错题 ${date}`,
-    "",
-    "## 今日错题",
-    "",
-    "- 来源：",
-    "- 科目/题型：",
-    "- 错因：",
-    "- 正解：",
-    "- 复盘：",
     "",
     "## 回看",
     "",
@@ -151,6 +204,32 @@ function renderMistakeMarkdown(date) {
     "- [ ] 7 天后",
     "",
   ].join("\n");
+}
+
+function buildMistakeSections(plan) {
+  const counts = new Map();
+  return normalizePlanTemplate(plan).map((text) => {
+    const count = (counts.get(text) || 0) + 1;
+    counts.set(text, count);
+    return { title: count === 1 ? text : `${text}（${count}）` };
+  });
+}
+
+function renderMistakeSection(title) {
+  return [
+    `## ${title}`,
+    "",
+    "### 错题 1",
+    "",
+    "- 题目：",
+    "- 错因：",
+    "- 正解：",
+    "",
+  ].join("\n");
+}
+
+function hasHeading(markdown, title) {
+  return markdown.split(/\r?\n/).some((line) => line.trim() === `## ${title}`);
 }
 
 function extractDate(markdown) {
@@ -178,7 +257,15 @@ function parsePlan(section) {
     .map((match) => ({ checked: match[1].toLowerCase() === "x", text: match[2].trim() }));
 }
 
-function parsePractice(section) {
+function parsePractice(section, plan = [], date = "") {
+  const detailed = parseDetailedPractice(section);
+  if (detailed) {
+    return {
+      items: syncPracticeItems(plan, detailed),
+      mistakeLink: buildMistakeLink(date),
+    };
+  }
+
   const fieldMap = {
     "行测题数": "xingceTotal",
     "正确数": "xingceCorrect",
@@ -194,7 +281,54 @@ function parsePractice(section) {
     const key = fieldMap[match[1].trim()];
     if (key) practice[key] = unescapeTableCell(match[2].trim());
   }
-  return practice;
+  const items = syncPracticeItems(plan);
+  if (items[0]) {
+    items[0] = {
+      ...items[0],
+      total: stringValue(practice.xingceTotal),
+      correct: stringValue(practice.xingceCorrect),
+      accuracy: calculateAccuracy(practice.xingceTotal, practice.xingceCorrect),
+      duration: stringValue(practice.studyTime),
+    };
+  }
+  return {
+    ...practice,
+    items,
+  };
+}
+
+function parseDetailedPractice(section) {
+  const rows = section
+    .split(/\r?\n/)
+    .map(parseTableRow)
+    .filter(Boolean);
+  const headerIndex = rows.findIndex((row) => row[0] === "项目" && row[1] === "总题数");
+  if (headerIndex === -1) return null;
+
+  return rows
+    .slice(headerIndex + 1)
+    .filter((row) => !row.every((cell) => /^-+$/.test(cell)))
+    .map((row) => {
+      const total = stringValue(row[1]);
+      const correct = stringValue(row[2]);
+      return {
+        text: stringValue(row[0]),
+        total,
+        correct,
+        accuracy: calculateAccuracy(total, correct),
+        duration: stringValue(row[4]),
+      };
+    })
+    .filter((item) => item.text || item.total || item.correct || item.duration);
+}
+
+function parseTableRow(line) {
+  const text = String(line || "").trim();
+  if (!text.startsWith("|") || !text.endsWith("|")) return null;
+  return text
+    .slice(1, -1)
+    .split(/(?<!\\)\|/)
+    .map((cell) => unescapeTableCell(cell.trim()));
 }
 
 function parseNumber(value) {
@@ -212,6 +346,10 @@ function unescapeTableCell(value) {
 
 function trimSlashes(value) {
   return String(value || "").replace(/^\/+|\/+$/g, "");
+}
+
+function stringValue(value) {
+  return value == null ? "" : String(value);
 }
 
 class CivilServiceDashboardPlugin extends Plugin {
@@ -389,18 +527,48 @@ class CivilServiceDashboardView extends ItemView {
   async openDailyMistakeNote() {
     if (!this.currentFile || !this.data) return;
     const date = this.data.date || dateFromPath(this.currentFile.path) || formatDate(new Date());
-    const file = await this.getOrCreateMistakeFile(date);
+    const file = await this.getOrCreateMistakeFile(date, this.data.plan);
     this.data.practice.mistakeLink = buildMistakeLink(date);
     await this.saveNow();
     await this.app.workspace.getLeaf(false).openFile(file);
   }
 
-  async getOrCreateMistakeFile(date) {
+  async openPlanMistakeNote(index) {
+    if (!this.currentFile || !this.data) return;
+    const date = this.data.date || dateFromPath(this.currentFile.path) || formatDate(new Date());
+    const sections = buildMistakeSections(this.data.plan);
+    const section = sections[index];
+    if (!section) {
+      await this.openDailyMistakeNote();
+      return;
+    }
+
+    const file = await this.getOrCreateMistakeFile(date, this.data.plan);
+    this.data.practice.mistakeLink = buildMistakeLink(date);
+    await this.saveNow();
+
+    const sourcePath = this.currentFile.path;
+    const linkText = `${MISTAKE_FOLDER}/${date}#${section.title}`;
+    if (typeof this.app.workspace.openLinkText === "function") {
+      await this.app.workspace.openLinkText(linkText, sourcePath, false);
+      return;
+    }
+    await this.app.workspace.getLeaf(false).openFile(file);
+  }
+
+  async getOrCreateMistakeFile(date, plan = []) {
     await this.ensureMistakeFolder();
     const path = buildMistakePath(date);
     const existing = this.app.vault.getFileByPath(path);
-    if (existing instanceof TFile) return existing;
-    return this.app.vault.create(path, renderMistakeMarkdown(date));
+    if (existing instanceof TFile) {
+      const current = await this.app.vault.read(existing);
+      const synced = ensureMistakePlanSections(current, date, plan);
+      if (synced !== current) {
+        await this.app.vault.modify(existing, synced);
+      }
+      return existing;
+    }
+    return this.app.vault.create(path, renderMistakeMarkdown(date, plan));
   }
 
   async ensureDiaryFolder() {
@@ -448,6 +616,7 @@ class CivilServiceDashboardView extends ItemView {
 
   renderBanner(container) {
     const metrics = calculateCompletion(this.data.plan);
+    const practiceSummary = calculatePracticeSummary(this.data.practice.items);
     const banner = container.createDiv({ cls: "csd-banner" });
     const copy = banner.createDiv({ cls: "csd-banner-copy" });
     copy.createEl("p", { cls: "csd-kicker", text: "Civil Service Dashboard" });
@@ -460,7 +629,7 @@ class CivilServiceDashboardView extends ItemView {
     const stats = banner.createDiv({ cls: "csd-banner-stats" });
     stats.createDiv({ cls: "csd-stat", text: `计划 ${metrics.done}/${metrics.total}` });
     stats.createDiv({ cls: "csd-stat", text: `完成率 ${metrics.percent}%` });
-    stats.createDiv({ cls: "csd-stat", text: `行测正确率 ${this.data.practice.accuracy || "0%"}` });
+    stats.createDiv({ cls: "csd-stat", text: `行测正确率 ${practiceSummary.accuracy}` });
     const progress = banner.createDiv({ cls: "csd-progress" });
     progress.createDiv({ cls: "csd-progress-fill" }).style.width = `${metrics.percent}%`;
   }
@@ -540,8 +709,16 @@ class CivilServiceDashboardView extends ItemView {
       input.value = task.text;
       input.addEventListener("input", () => {
         this.data.plan[index].text = input.value;
+        this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
         this.scheduleSave();
       });
+
+      const mistake = row.createEl("button", {
+        cls: "csd-plan-mistake-button",
+        text: "错题",
+        attr: { "aria-label": `打开${task.text || "当前计划"}错题` },
+      });
+      mistake.addEventListener("click", () => this.openPlanMistakeNote(index));
 
       const remove = row.createEl("button", {
         cls: "csd-icon-button csd-delete-button",
@@ -550,6 +727,10 @@ class CivilServiceDashboardView extends ItemView {
       });
       remove.addEventListener("click", () => {
         this.data.plan.splice(index, 1);
+        if (Array.isArray(this.data.practice.items)) {
+          this.data.practice.items.splice(index, 1);
+        }
+        this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
         this.render();
         this.scheduleSave();
       });
@@ -567,6 +748,7 @@ class CivilServiceDashboardView extends ItemView {
       const text = addInput.value.trim();
       if (!text) return;
       this.data.plan.push({ text, checked: false });
+      this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
       this.render();
       this.scheduleSave();
     };
@@ -578,38 +760,80 @@ class CivilServiceDashboardView extends ItemView {
 
   renderPracticeCard(card) {
     this.renderCardHeader(card, "本日做题情况", "bar-chart-3");
-    const grid = card.createDiv({ cls: "csd-form-grid" });
+    this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
+    const list = card.createDiv({ cls: "csd-practice-list" });
 
-    const totalInput = this.renderField(grid, "行测题数", "xingceTotal", "number", "80");
-    const correctInput = this.renderField(grid, "正确数", "xingceCorrect", "number", "64");
-    const accuracy = grid.createDiv({ cls: "csd-field" });
-    accuracy.createEl("label", { text: "正确率" });
-    accuracy.createDiv({ cls: "csd-readonly-value", text: this.data.practice.accuracy || "0%" });
+    this.data.practice.items.forEach((item, index) => {
+      const row = list.createDiv({ cls: "csd-practice-row" });
+      row.createDiv({ cls: "csd-practice-title", text: item.text || "未命名计划" });
 
-    this.renderField(grid, "申论练习", "shenlun", "text", "大作文 / 小题 / 素材积累");
-    this.renderField(grid, "学习时长", "studyTime", "text", "3h");
-    const mistakeInput = this.renderField(grid, "错题链接", "mistakeLink", "text", "[[错题/2026-05-21]]");
-    const mistakeActions = grid.createDiv({ cls: "csd-field csd-mistake-actions" });
-    mistakeActions.createEl("label", { text: "错题本" });
-    const mistakeButton = mistakeActions.createEl("button", {
+      const totalField = row.createDiv({ cls: "csd-practice-field" });
+      totalField.createEl("label", { text: "总题数" });
+      const totalInput = totalField.createEl("input", {
+        cls: "csd-text-input csd-practice-total-input",
+        attr: { type: "number", placeholder: "0" },
+      });
+      totalInput.value = item.total || "";
+
+      const correctField = row.createDiv({ cls: "csd-practice-field" });
+      correctField.createEl("label", { text: "正确数" });
+      const correctInput = correctField.createEl("input", {
+        cls: "csd-text-input csd-practice-correct-input",
+        attr: { type: "number", placeholder: "0" },
+      });
+      correctInput.value = item.correct || "";
+
+      const accuracyField = row.createDiv({ cls: "csd-practice-field" });
+      accuracyField.createEl("label", { text: "正确率" });
+      const accuracyValue = accuracyField.createDiv({
+        cls: "csd-readonly-value csd-practice-accuracy-value",
+        text: item.accuracy || "0%",
+      });
+
+      const durationField = row.createDiv({ cls: "csd-practice-field" });
+      durationField.createEl("label", { text: "用时" });
+      const durationInput = durationField.createEl("input", {
+        cls: "csd-text-input csd-practice-duration-input",
+        attr: { type: "text", placeholder: "25m" },
+      });
+      durationInput.value = item.duration || "";
+
+      const mistakeField = row.createDiv({ cls: "csd-practice-field csd-practice-mistake-field" });
+      mistakeField.createEl("label", { text: "错题" });
+      const mistakeButton = mistakeField.createEl("button", {
+        cls: "csd-primary-button csd-practice-mistake-button",
+        text: "错题",
+      });
+      mistakeButton.addEventListener("click", () => this.openPlanMistakeNote(index));
+
+      const updateItem = () => {
+        const total = totalInput.value;
+        const correct = correctInput.value;
+        const duration = durationInput.value;
+        this.data.practice.items[index] = {
+          text: stringValue(this.data.plan[index] && this.data.plan[index].text),
+          total,
+          correct,
+          accuracy: calculateAccuracy(total, correct),
+          duration,
+        };
+        accuracyValue.setText(this.data.practice.items[index].accuracy);
+        this.updateHeaderMetrics();
+        this.scheduleSave();
+      };
+      totalInput.addEventListener("input", updateItem);
+      correctInput.addEventListener("input", updateItem);
+      durationInput.addEventListener("input", updateItem);
+    });
+
+    const actions = card.createDiv({ cls: "csd-practice-actions" });
+    const mistakeButton = actions.createEl("button", {
       cls: "csd-primary-button csd-mistake-button",
       text: "创建/打开错题本",
     });
     mistakeButton.addEventListener("click", async () => {
-      const date = this.data.date || formatDate(new Date());
-      mistakeInput.value = buildMistakeLink(date);
       await this.openDailyMistakeNote();
     });
-
-    const updateAccuracy = () => {
-      this.data.practice.accuracy = calculateAccuracy(totalInput.value, correctInput.value);
-      const value = card.querySelector(".csd-readonly-value");
-      if (value) value.setText(this.data.practice.accuracy);
-      this.updateHeaderMetrics();
-      this.scheduleSave();
-    };
-    totalInput.addEventListener("input", updateAccuracy);
-    correctInput.addEventListener("input", updateAccuracy);
   }
 
   renderReviewCard(card) {
@@ -649,10 +873,8 @@ class CivilServiceDashboardView extends ItemView {
 
   updateHeaderMetrics() {
     if (!this.data) return;
-    this.data.practice.accuracy = calculateAccuracy(
-      this.data.practice.xingceTotal,
-      this.data.practice.xingceCorrect
-    );
+    this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
+    const practiceSummary = calculatePracticeSummary(this.data.practice.items);
 
     const metrics = calculateCompletion(this.data.plan);
     const root = this.getRootEl();
@@ -660,7 +882,7 @@ class CivilServiceDashboardView extends ItemView {
     const stats = root.querySelectorAll(".csd-stat");
     if (stats[0]) stats[0].setText(`计划 ${metrics.done}/${metrics.total}`);
     if (stats[1]) stats[1].setText(`完成率 ${metrics.percent}%`);
-    if (stats[2]) stats[2].setText(`行测正确率 ${this.data.practice.accuracy}`);
+    if (stats[2]) stats[2].setText(`行测正确率 ${practiceSummary.accuracy}`);
 
     const fill = root.querySelector(".csd-progress-fill");
     if (fill) fill.style.width = `${metrics.percent}%`;

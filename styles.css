@@ -29,6 +29,11 @@
   font-family: "Inter", "Noto Sans SC", var(--font-interface);
 }
 
+.csd-root,
+.csd-root * {
+  box-sizing: border-box;
+}
+
 .theme-dark .csd-root {
   --csd-bg: #0f172a;
   --csd-surface: #172033;
@@ -208,7 +213,8 @@
 .csd-action-button,
 .csd-date-item,
 .csd-primary-button,
-.csd-icon-button {
+.csd-icon-button,
+.csd-plan-mistake-button {
   border: 0;
   font-family: inherit;
   cursor: pointer;
@@ -285,7 +291,7 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 18px;
+  padding: 16px;
 }
 
 .csd-review-card {
@@ -296,7 +302,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding-bottom: 14px;
+  padding-bottom: 12px;
   margin-bottom: 14px;
   border-bottom: 1px solid var(--csd-border);
 }
@@ -320,19 +326,20 @@
 .csd-task-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .csd-task-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: 34px;
   border: 1px solid var(--csd-border);
-  border-radius: 10px;
-  padding: 6px 7px;
-  background: var(--csd-surface-soft);
+  border-radius: 9px;
+  padding: 5px 6px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 }
 
 .csd-task-row.is-done .csd-task-input {
@@ -357,7 +364,7 @@
 
 .csd-task-input {
   border: 0;
-  padding: 6px 2px;
+  padding: 5px 2px;
   background: transparent;
 }
 
@@ -373,8 +380,8 @@
 }
 
 .csd-icon-button {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -392,6 +399,22 @@
 .csd-icon-button:hover {
   background: color-mix(in srgb, var(--csd-danger) 10%, transparent);
   color: var(--csd-danger);
+}
+
+.csd-plan-mistake-button {
+  min-height: 26px;
+  border-radius: 8px;
+  padding: 0 8px;
+  background: var(--csd-accent-soft);
+  color: var(--csd-accent-strong);
+  font-size: 0.74rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.csd-plan-mistake-button:hover {
+  background: var(--csd-accent);
+  color: #ffffff;
 }
 
 .csd-icon-button svg {
@@ -422,6 +445,80 @@
 .csd-mistake-button {
   width: 100%;
   min-height: 38px;
+}
+
+.csd-practice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.csd-practice-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.35fr)
+    minmax(74px, 0.58fr)
+    minmax(74px, 0.58fr)
+    minmax(82px, 0.62fr)
+    minmax(78px, 0.62fr)
+    minmax(58px, auto);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--csd-border);
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.csd-practice-title {
+  align-self: center;
+  color: var(--csd-text);
+  font-weight: 800;
+  line-height: 1.3;
+  word-break: break-word;
+  padding-left: 10px;
+  border-left: 4px solid var(--csd-accent);
+}
+
+.csd-practice-field {
+  min-width: 0;
+}
+
+.csd-practice-field label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--csd-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.csd-practice-field .csd-text-input {
+  min-height: 34px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 0.86rem;
+}
+
+.csd-practice-accuracy-value {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.csd-practice-mistake-button {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.csd-practice-actions {
+  margin-top: 12px;
 }
 
 .csd-form-grid {
@@ -497,6 +594,14 @@
     grid-template-columns: 1fr;
   }
 
+  .csd-practice-row {
+    grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(80px, 0.7fr)) minmax(82px, 0.7fr);
+  }
+
+  .csd-practice-mistake-field {
+    grid-column: 1 / -1;
+  }
+
   .csd-review-card {
     grid-column: auto;
   }
@@ -522,7 +627,8 @@
   }
 
   .csd-form-grid,
-  .csd-add-row {
+  .csd-add-row,
+  .csd-practice-row {
     grid-template-columns: 1fr;
   }
 }
