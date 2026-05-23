@@ -1646,19 +1646,28 @@ class CivilServiceDashboardView extends ItemView {
       });
       button.addEventListener("click", () => {
         this.selectedReviewIndex = index;
-        this.render();
+        const buttons = typeof selector.querySelectorAll === "function"
+          ? Array.from(selector.querySelectorAll(".csd-review-selector-button"))
+          : [];
+        buttons.forEach((item, itemIndex) => item.toggleClass("is-active", itemIndex === index));
+        this.loadMistakeReviewIntoBody(body, index);
       });
     });
 
     const body = card.createDiv({ cls: "csd-mistake-review-body" });
+    this.loadMistakeReviewIntoBody(body, this.selectedReviewIndex);
+  }
+
+  loadMistakeReviewIntoBody(body, index) {
+    body.empty();
     body.createDiv({ cls: "csd-muted", text: "正在加载复盘卡片..." });
     const loadId = this.mistakeReviewLoadId + 1;
     this.mistakeReviewLoadId = loadId;
-    this.mistakeReviewLoadPromise = this.loadMistakeReviewBlock(this.selectedReviewIndex)
+    this.mistakeReviewLoadPromise = this.loadMistakeReviewBlock(index)
       .then(({ section, block }) => {
         if (loadId !== this.mistakeReviewLoadId) return;
         body.empty();
-        this.renderMistakeReviewEditor(body, this.selectedReviewIndex, section, block);
+        this.renderMistakeReviewEditor(body, index, section, block);
       })
       .catch(() => {
         if (loadId !== this.mistakeReviewLoadId) return;
