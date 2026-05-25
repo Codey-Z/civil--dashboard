@@ -239,6 +239,7 @@
 .csd-icon-button,
 .csd-plan-mistake-button,
 .csd-review-selector-button,
+.csd-mock-module-name,
 .csd-mistake-review-cause-chip {
   border: 0;
   font-family: inherit;
@@ -334,6 +335,10 @@
 .csd-mistake-review-card,
 .csd-review-card {
   min-height: 360px;
+}
+
+.csd-mistake-review-card.is-mock-exam {
+  grid-column: 1 / -1;
 }
 
 .csd-card-header {
@@ -473,6 +478,17 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   margin-top: 13px;
+}
+
+.csd-plan-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.csd-add-mock-exam-button {
+  min-height: 34px;
 }
 
 .csd-primary-button {
@@ -751,6 +767,119 @@
   font-size: 0.86rem;
 }
 
+.csd-mock-exam-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.csd-mock-exam-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.csd-mock-module-panel,
+.csd-mock-detail-panel {
+  min-width: 0;
+}
+
+.csd-mock-detail-panel {
+  position: sticky;
+  top: 12px;
+  align-self: start;
+}
+
+.csd-mock-module-table {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.csd-mock-module-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--csd-border);
+  border-radius: 13px;
+  padding: 10px 11px;
+  background: color-mix(in srgb, var(--csd-surface-soft) 72%, var(--csd-surface));
+}
+
+.csd-mock-module-name {
+  flex: 1.6 1 160px;
+  min-height: 36px;
+  border-radius: 10px;
+  padding: 0 10px;
+  text-align: left;
+  background: transparent;
+  color: var(--csd-text);
+  font-weight: 850;
+}
+
+.csd-mock-module-row.is-active {
+  border-color: var(--csd-border-strong);
+  background:
+    linear-gradient(90deg, var(--csd-teal-soft), transparent 42%),
+    color-mix(in srgb, var(--csd-surface) 86%, var(--csd-surface-soft));
+  box-shadow: inset 4px 0 0 var(--csd-teal), var(--csd-shadow-soft);
+}
+
+.csd-mock-module-name:hover {
+  background: var(--csd-teal-soft);
+  color: var(--csd-teal);
+}
+
+.csd-mock-module-row.is-active .csd-mock-module-name {
+  color: var(--csd-teal);
+}
+
+.csd-mock-module-detail {
+  border: 1px solid var(--csd-border);
+  border-radius: 14px;
+  padding: 13px;
+  background:
+    linear-gradient(135deg, var(--csd-teal-soft), transparent 34%),
+    color-mix(in srgb, var(--csd-surface) 94%, var(--csd-surface-soft));
+}
+
+.csd-mock-module-detail-title {
+  margin-bottom: 10px;
+  color: var(--csd-text);
+  font-size: 0.95rem;
+  font-weight: 850;
+}
+
+.csd-mock-cause-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 9px 0 12px;
+}
+
+.csd-mock-cause-count-row {
+  flex: 1 1 130px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--csd-border);
+  border-radius: 11px;
+  padding: 7px 8px;
+  background: var(--csd-surface);
+  color: var(--csd-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.csd-mock-cause-count-input {
+  min-height: 30px;
+  padding: 5px 7px;
+  border-radius: 8px;
+}
+
 .csd-muted,
 .csd-empty {
   color: var(--csd-muted);
@@ -934,6 +1063,14 @@
   .csd-mistake-review-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .csd-mock-exam-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .csd-mock-detail-panel {
+    position: static;
+  }
 }
 
 @media (max-width: 640px) {
@@ -972,7 +1109,9 @@
 
   .csd-practice-title,
   .csd-practice-field,
-  .csd-practice-mistake-field {
+  .csd-practice-mistake-field,
+  .csd-mock-module-name,
+  .csd-mock-module-row .csd-practice-field {
     flex-basis: 100%;
   }
 

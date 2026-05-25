@@ -2,14 +2,11 @@ const { ItemView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, setIc
 
 const VIEW_TYPE = "civil-service-dashboard-view";
 const DIARY_FOLDER = "日记";
-const MISTAKE_FOLDER = "错题";
 const DAILY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-const DEFAULT_PLAN_TEMPLATE = [
-  "资料分析第 1 套",
-  "资料分析第 2 套",
-  "言语理解第 1 套",
-];
+const MISTAKE_FOLDER = "错题";
+const DEFAULT_PLAN_TEMPLATE = [];
 const MISTAKE_TAXONOMY = {
+  "政治理论": ["知识盲区", "概念混淆", "政策表述看错", "时政关联不足", "关键词误读", "主体看错", "选项偷换", "记忆混淆", "材料理解偏差", "速度取舍"],
   "资料分析": ["读题偏差", "主体看错", "时间看错", "指标看错", "公式选错", "单位换算", "计算失误", "估算不当", "比较方法不当", "速度取舍"],
   "言语理解": ["主题句误判", "转折递进忽略", "语境理解偏差", "选项偷换概念", "感情色彩误判", "逻辑关系误判", "关键词遗漏", "过度推断", "干扰项排除不足", "速度取舍"],
   "判断推理": ["规律入口错误", "图形细节遗漏", "条件翻译错误", "逻辑关系误判", "定义关键词遗漏", "类比关系误判", "排除法不足", "假设代入不当", "信息整理混乱", "时间取舍"],
@@ -18,6 +15,15 @@ const MISTAKE_TAXONOMY = {
   "申论": ["审题偏差", "材料定位错误", "要点遗漏", "概括不准", "逻辑层次混乱", "表达不规范", "对策空泛", "关键词缺失", "字数控制", "时间分配"],
   "其他": ["读题", "方法", "速度", "知识", "计算", "表达", "心态", "取舍", "粗心", "未分类"],
 };
+const MOCK_EXAM_TITLE_RE = /行测模考/;
+const MOCK_EXAM_MODULES = [
+  { type: "政治理论", total: "20" },
+  { type: "常识判断", total: "20" },
+  { type: "言语理解", total: "40" },
+  { type: "数量关系", total: "10" },
+  { type: "判断推理", total: "40" },
+  { type: "资料分析", total: "20" },
+];
 
 function createDefaultDailyData(date, planTemplate = DEFAULT_PLAN_TEMPLATE) {
   const plan = createPlanFromTemplate(planTemplate);
@@ -32,26 +38,69 @@ function createDefaultDailyData(date, planTemplate = DEFAULT_PLAN_TEMPLATE) {
   };
 }
 
-function renderDailyMarkdown(data) {
+function renderDailyMarkdown(data, existingMarkdown = "") {
+  const existing = stringValue(existingMarkdown);
+  if (existing.trim()) {
+    return renderDailyMarkdownIntoExisting(data, existing);
+  }
+
+  return renderFreshDailyMarkdown(data);
+}
+
+function renderFreshDailyMarkdown(data) {
   const plan = Array.isArray(data.plan) ? data.plan : [];
+
+  const lines = [
+    `# 考公日记 ${data.date}`,
+    "",
+    "## 本日计划",
+    ...renderDailyPlanBody(plan),
+    "## 本日做题情况",
+    ...renderDailyPracticeBody(data, plan),
+    "## 复盘",
+    ...renderDailyReviewBody(data),
+  ];
+
+  return lines.join("\n");
+}
+
+function renderDailyMarkdownIntoExisting(data, existingMarkdown) {
+  const plan = Array.isArray(data.plan) ? data.plan : [];
+  let lines = existingMarkdown.split(/\r?\n/);
+  const title = `# 考公日记 ${data.date}`;
+  const titleIndex = lines.findIndex((line) => /^#\s+考公日记\b/.test(line.trim()));
+  if (titleIndex >= 0) {
+    lines[titleIndex] = title;
+  } else {
+    lines.unshift(title, "");
+  }
+
+  lines = replaceMarkdownSection(lines, "本日计划", renderDailyPlanBody(plan));
+  lines = replaceMarkdownSection(lines, "本日做题情况", renderDailyPracticeBody(data, plan));
+  lines = replaceMarkdownSection(lines, "复盘", renderDailyReviewBody(data));
+  return lines.join("\n").replace(/\s*$/, "\n");
+}
+
+function renderDailyPlanBody(plan) {
+  const lines = [""];
+  if (plan.length > 0) {
+    for (const task of plan) {
+      const checked = task.checked ? "x" : " ";
+      lines.push(`- [${checked}] ${task.text || ""}`);
+    }
+  }
+  lines.push("");
+  return lines;
+}
+
+function renderDailyPracticeBody(data, plan) {
   const practice = {
     ...createDefaultDailyData(data.date).practice,
     ...data.practice,
   };
   practice.items = syncPracticeItems(plan, practice.items);
 
-  const lines = [`# 考公日记 ${data.date}`, "", "## 本日计划", ""];
-  if (plan.length === 0) {
-    lines.push("- [ ] ");
-  } else {
-    for (const task of plan) {
-      lines.push(`- [${task.checked ? "x" : " "}] ${task.text || ""}`);
-    }
-  }
-
-  lines.push(
-    "",
-    "## 本日做题情况",
+  return [
     "",
     "| 项目 | 总题数 | 正确数 | 正确率 | 用时 | 错题 |",
     "| --- | --- | --- | --- | --- | --- |",
@@ -69,21 +118,45 @@ function renderDailyMarkdown(data) {
       ].map(escapeTableCell).join(" | ").replace(/^ \| /, "| ") + " |";
     }),
     "",
-    "## 复盘",
-    "",
-    data.review || "",
-    ""
-  );
+  ];
+}
 
-  return lines.join("\n");
+function renderDailyReviewBody(data) {
+  return ["", data.review || "", ""];
+}
+
+function replaceMarkdownSection(lines, heading, bodyLines) {
+  const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  if (start === -1) {
+    const next = [...lines];
+    while (next.length > 0 && next[next.length - 1].trim() === "") next.pop();
+    next.push("", `## ${heading}`, ...bodyLines);
+    return next;
+  }
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index].trim())) {
+      end = index;
+      break;
+    }
+  }
+  const next = [...lines];
+  next.splice(start + 1, end - start - 1, ...bodyLines);
+  return next;
 }
 
 function parseDailyMarkdown(markdown, fallbackDate) {
   const data = createDefaultDailyData(extractDate(markdown) || fallbackDate);
   const planSection = extractSection(markdown, "本日计划");
   const practiceSection = extractSection(markdown, "本日做题情况");
+  const reviewSection = extractSection(markdown, "复盘");
+
   const parsedPlan = parsePlan(planSection);
-  if (parsedPlan.length > 0) data.plan = parsedPlan;
+  if (parsedPlan.length > 0) {
+    data.plan = parsedPlan;
+  }
+
   data.practice = {
     ...data.practice,
     ...parsePractice(practiceSection, data.plan, data.date),
@@ -92,7 +165,8 @@ function parseDailyMarkdown(markdown, fallbackDate) {
     data.practice.mistakeLink = buildMistakeLink(data.date);
   }
   data.practice.items = syncPracticeItems(data.plan, data.practice.items);
-  data.review = extractSection(markdown, "复盘").trim();
+  data.review = reviewSection.trim();
+
   return data;
 }
 
@@ -113,7 +187,11 @@ function pickLatestDailyPath(paths, diaryFolder) {
 function calculateCompletion(plan) {
   const total = Array.isArray(plan) ? plan.length : 0;
   const done = Array.isArray(plan) ? plan.filter((task) => task.checked).length : 0;
-  return { done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) };
+  return {
+    done,
+    total,
+    percent: total === 0 ? 0 : Math.round((done / total) * 100),
+  };
 }
 
 function calculateAccuracy(totalValue, correctValue) {
@@ -139,10 +217,11 @@ function syncPracticeItems(plan, items = []) {
   const sourceItems = Array.isArray(items) ? items : [];
   return (Array.isArray(plan) ? plan : []).map((task, index) => {
     const previous = sourceItems[index] || {};
-    const total = stringValue(previous.total);
+    const text = stringValue(task && task.text);
+    const total = stringValue(previous.total) || (isMockExamTitle(text) ? String(getMockExamDefaultTotal()) : "");
     const correct = stringValue(previous.correct);
     return {
-      text: stringValue(task && task.text),
+      text,
       total,
       correct,
       accuracy: calculateAccuracy(total, correct),
@@ -162,7 +241,7 @@ function normalizePlanTemplate(planTemplate) {
     .map((text) => text.trim())
     .filter(Boolean);
 
-  return normalized.length > 0 ? normalized : [...DEFAULT_PLAN_TEMPLATE];
+  return normalized;
 }
 
 function createPlanFromTemplate(planTemplate) {
@@ -224,14 +303,16 @@ function renderMistakeBase(date) {
 
 function buildMistakeSections(plan) {
   const counts = new Map();
-  return normalizePlanTemplate(plan).map((text, index) => {
-    const count = (counts.get(text) || 0) + 1;
-    counts.set(text, count);
-    return { index, title: count === 1 ? text : `${text}（${count}）` };
-  });
+  return normalizePlanTemplate(plan)
+    .map((text, index) => {
+      const count = (counts.get(text) || 0) + 1;
+      counts.set(text, count);
+      return { index, title: count === 1 ? text : `${text}（${count}）` };
+    });
 }
 
 function renderMistakeSection(title, practiceItem = {}) {
+  if (isMockExamTitle(title)) return renderMockExamSection(title, practiceItem);
   const stats = buildMistakeReviewStats(practiceItem);
   return [
     `## ${title}`,
@@ -254,6 +335,170 @@ function renderMistakeSection(title, practiceItem = {}) {
     "",
     "",
   ].join("\n");
+}
+
+function isMockExamTitle(title) {
+  return MOCK_EXAM_TITLE_RE.test(stringValue(title));
+}
+
+function getNextMockExamTitle(plan = []) {
+  const count = normalizePlanTemplate(plan).filter(isMockExamTitle).length;
+  return `行测模考 ${count + 1}`;
+}
+
+function getMockExamDefaultTotal() {
+  return MOCK_EXAM_MODULES.reduce((sum, module) => sum + parseNumber(module.total), 0);
+}
+
+function createDefaultMockExamModules() {
+  return MOCK_EXAM_MODULES.map((module) => ({
+    type: module.type,
+    total: module.total,
+    correct: "",
+    wrong: "",
+    accuracy: "",
+    duration: "",
+    causeDistribution: [{ cause: "未分类", count: "" }],
+    representativeProblems: "第 题：",
+    moduleReview: "",
+    nextActions: "- [ ]",
+  }));
+}
+
+function renderMockExamSection(title, practiceItem = {}) {
+  const modules = createDefaultMockExamModules();
+  const summary = buildMockExamSummary(modules, practiceItem);
+  return renderMockExamSectionFromBlock({
+    title,
+    ...summary,
+    wholeConclusion: "",
+    modules,
+    setReview: "",
+    nextActions: "- [ ]",
+  });
+}
+
+function renderMockExamSectionFromBlock(block) {
+  const summary = buildMockExamSummary(block.modules || [], block);
+  return [
+    `## ${block.title}`,
+    "",
+    "套卷类型:: 行测模考",
+    `总题数:: ${summary.total}`,
+    `正确数:: ${summary.correct}`,
+    `错题数:: ${summary.wrong}`,
+    `正确率:: ${summary.accuracy}`,
+    `用时:: ${summary.duration}`,
+    "",
+    "### 整卷结论",
+    "",
+    stringValue(block.wholeConclusion),
+    "",
+    ...(block.modules || createDefaultMockExamModules()).flatMap(renderMockExamModule),
+    "### 本套复盘",
+    "",
+    stringValue(block.setReview),
+    "",
+    "### 下套动作",
+    "",
+    stringValue(block.nextActions || "- [ ]"),
+    "",
+  ].join("\n");
+}
+
+function renderMockExamModule(module) {
+  const stats = buildMockExamModuleStats(module);
+  return [
+    `### ${module.type}`,
+    "",
+    `题型:: ${module.type}`,
+    `总题数:: ${stats.total}`,
+    `正确数:: ${stats.correct}`,
+    `错题数:: ${stats.wrong}`,
+    `正确率:: ${stats.accuracy}`,
+    `用时:: ${stats.duration}`,
+    "",
+    "#### 错因分布",
+    "",
+    ...normalizeCauseDistribution(module.causeDistribution).map((item) => `- ${item.cause}：${item.count}`),
+    "",
+    "#### 代表题",
+    "",
+    stringValue(module.representativeProblems || "第 题："),
+    "",
+    "#### 本模块复盘",
+    "",
+    stringValue(module.moduleReview),
+    "",
+    "#### 下次动作",
+    "",
+    stringValue(module.nextActions || "- [ ]"),
+    "",
+  ];
+}
+
+function buildMockExamModuleStats(module = {}) {
+  const total = stringValue(module.total);
+  const correct = stringValue(module.correct);
+  const hasCorrect = correct.trim() !== "";
+  return {
+    total,
+    correct,
+    wrong: total && hasCorrect ? String(Math.max(0, parseNumber(total) - parseNumber(correct))) : stringValue(module.wrong),
+    accuracy: total && hasCorrect ? calculateAccuracy(total, correct) : stringValue(module.accuracy),
+    duration: stringValue(module.duration),
+  };
+}
+
+function buildMockExamSummary(modules = [], fallback = {}) {
+  const moduleStats = normalizeMockExamModules(modules).map(buildMockExamModuleStats);
+  const total = moduleStats.reduce((sum, module) => sum + parseNumber(module.total), 0) || parseNumber(fallback.total);
+  const hasCorrect = moduleStats.some((module) => module.correct.trim() !== "") || stringValue(fallback.correct).trim() !== "";
+  const correct = hasCorrect
+    ? moduleStats.reduce((sum, module) => sum + parseNumber(module.correct), 0)
+    : parseNumber(fallback.correct);
+  const duration = sumDurations(moduleStats.map((module) => module.duration)) || stringValue(fallback.duration);
+
+  return {
+    total: total ? String(total) : "",
+    correct: hasCorrect || correct ? String(correct) : "",
+    wrong: total && (hasCorrect || correct) ? String(Math.max(0, total - correct)) : stringValue(fallback.wrong),
+    accuracy: total && (hasCorrect || correct) ? calculateAccuracy(total, correct) : stringValue(fallback.accuracy),
+    duration,
+  };
+}
+
+function normalizeMockExamModules(modules = []) {
+  const source = Array.isArray(modules) ? modules : [];
+  return createDefaultMockExamModules().map((defaultModule) => {
+    const existing = source.find((module) => module && module.type === defaultModule.type) || {};
+    const stats = buildMockExamModuleStats({ ...defaultModule, ...existing });
+    return {
+      ...defaultModule,
+      ...existing,
+      ...stats,
+      causeDistribution: normalizeCauseDistribution(existing.causeDistribution || defaultModule.causeDistribution),
+      representativeProblems: stringValue(existing.representativeProblems || defaultModule.representativeProblems),
+      moduleReview: stringValue(existing.moduleReview),
+      nextActions: stringValue(existing.nextActions || defaultModule.nextActions),
+    };
+  });
+}
+
+function sumDurations(values) {
+  const total = values.reduce((sum, value) => sum + parseNumber(value), 0);
+  return total ? `${total}min` : "";
+}
+
+function normalizeCauseDistribution(distribution) {
+  const source = Array.isArray(distribution) ? distribution : [];
+  const normalized = source
+    .map((item) => ({
+      cause: stringValue(item && item.cause).trim(),
+      count: stringValue(item && item.count).trim(),
+    }))
+    .filter((item) => item.cause);
+  return normalized.length > 0 ? normalized : [{ cause: "未分类", count: "" }];
 }
 
 function inferMistakeType(title) {
@@ -292,12 +537,13 @@ function fillMistakeReviewStats(markdown, sections, practiceItems = []) {
     if (!hasReviewStatsFields(blockLines)) continue;
 
     const stats = buildMistakeReviewStats(practiceItems[section.index]);
-    for (let index = range.start; index < range.end; index += 1) {
-      const replacement = fillBlankReviewField(lines[index], "总题数", stats.total)
-        || fillBlankReviewField(lines[index], "正确数", stats.correct)
-        || fillBlankReviewField(lines[index], "错题数", stats.wrong)
-        || fillBlankReviewField(lines[index], "正确率", stats.accuracy)
-        || fillBlankReviewField(lines[index], "用时", stats.duration);
+    const fieldEnd = findReviewFieldBoundary(lines, range, 3);
+    for (let index = range.start; index < fieldEnd; index += 1) {
+      const replacement = syncReviewField(lines[index], "总题数", stats.total)
+        || syncReviewField(lines[index], "正确数", stats.correct)
+        || syncReviewField(lines[index], "错题数", stats.wrong)
+        || syncReviewField(lines[index], "正确率", stats.accuracy)
+        || syncReviewField(lines[index], "用时", stats.duration);
       if (replacement && replacement !== lines[index]) {
         lines[index] = replacement;
         changed = true;
@@ -306,6 +552,14 @@ function fillMistakeReviewStats(markdown, sections, practiceItems = []) {
   }
 
   return changed ? lines.join("\n") : markdown;
+}
+
+function findReviewFieldBoundary(lines, range, headingLevel) {
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    const match = lines[index].trim().match(/^(#{1,6})\s+/);
+    if (match && match[1].length >= headingLevel) return index;
+  }
+  return range.end;
 }
 
 function hasReviewStatsFields(lines) {
@@ -321,6 +575,12 @@ function fillBlankReviewField(line, fieldName, value) {
   const pattern = new RegExp(`^(${escapeRegex(fieldName)}::)\\s*$`);
   const match = stringValue(line).match(pattern);
   return match ? `${match[1]} ${value}` : "";
+}
+
+function syncReviewField(line, fieldName, value) {
+  const pattern = new RegExp(`^(${escapeRegex(fieldName)}::)\\s*.*$`);
+  const match = stringValue(line).match(pattern);
+  return match ? `${match[1]} ${stringValue(value)}` : "";
 }
 
 function normalizeMistakeTaxonomy(taxonomy) {
@@ -380,6 +640,13 @@ function parseMistakeReviewBlocks(markdown) {
     if (!sectionMatch || sectionMatch[1] === "回看") continue;
     const end = findNextReviewBoundary(lines, index + 1);
     const blockLines = lines.slice(index, end);
+    if (readDataviewField(blockLines, "套卷类型") === "行测模考" || isMockExamTitle(sectionMatch[1])) {
+      blocks.push({
+        ...parseMockExamBlockLines(sectionMatch[1], blockLines),
+        isMockExam: true,
+      });
+      continue;
+    }
     blocks.push({
       title: sectionMatch[1],
       type: readDataviewField(blockLines, "题型"),
@@ -402,6 +669,183 @@ function parseMistakeReviewBlocks(markdown) {
     });
   }
   return blocks;
+}
+
+function parseMockExamReviewBlocks(markdown) {
+  return parseMistakeReviewBlocks(markdown).filter((block) => block.isMockExam);
+}
+
+function parseMockExamBlockLines(title, blockLines) {
+  const modules = MOCK_EXAM_MODULES.map((module) => parseMockExamModule(blockLines, module.type));
+  return {
+    title,
+    type: "行测模考",
+    total: readDataviewField(blockLines, "总题数"),
+    correct: readDataviewField(blockLines, "正确数"),
+    wrong: readDataviewField(blockLines, "错题数"),
+    accuracy: readDataviewField(blockLines, "正确率"),
+    duration: readDataviewField(blockLines, "用时"),
+    wholeConclusion: readHeadingSubsection(blockLines, "整卷结论", 3),
+    modules,
+    setReview: readHeadingSubsection(blockLines, "本套复盘", 3),
+    nextActions: readHeadingSubsection(blockLines, "下套动作", 3),
+  };
+}
+
+function parseMockExamModule(blockLines, type) {
+  const range = findHeadingRange(blockLines, type, 3);
+  const defaultModule = createDefaultMockExamModules().find((module) => module.type === type);
+  if (!range) return defaultModule;
+  const lines = blockLines.slice(range.start, range.end);
+  const total = readDataviewField(lines, "总题数") || defaultModule.total;
+  const correct = readDataviewField(lines, "正确数");
+  const stats = buildMockExamModuleStats({
+    total,
+    correct,
+    wrong: readDataviewField(lines, "错题数"),
+    accuracy: readDataviewField(lines, "正确率"),
+    duration: readDataviewField(lines, "用时"),
+  });
+  return {
+    ...defaultModule,
+    ...stats,
+    causeDistribution: parseHeadingCauseDistribution(lines, 4),
+    representativeProblems: readHeadingSubsection(lines, "代表题", 4),
+    moduleReview: readHeadingSubsection(lines, "本模块复盘", 4),
+    nextActions: readHeadingSubsection(lines, "下次动作", 4),
+  };
+}
+
+function updateMockExamReviewBlock(markdown, title, updates = {}) {
+  const source = String(markdown || "");
+  const lines = source.split(/\r?\n/);
+  const range = findReviewBlockRangeByTitle(lines, title);
+  if (!range) return { changed: false, markdown: source, summary: null };
+
+  const blockLines = lines.slice(range.start, range.end);
+  const block = parseMockExamBlockLines(title, blockLines);
+  const modules = normalizeMockExamModules(block.modules);
+  const moduleIndex = modules.findIndex((module) => module.type === updates.moduleType);
+  if (moduleIndex >= 0) {
+    const module = { ...modules[moduleIndex] };
+    if (hasOwn(updates, "total")) module.total = stringValue(updates.total);
+    if (hasOwn(updates, "correct")) module.correct = stringValue(updates.correct);
+    if (hasOwn(updates, "duration")) module.duration = stringValue(updates.duration);
+    if (hasOwn(updates, "causeDistribution")) module.causeDistribution = normalizeCauseDistribution(updates.causeDistribution);
+    if (hasOwn(updates, "representativeProblems")) module.representativeProblems = stringValue(updates.representativeProblems);
+    if (hasOwn(updates, "moduleReview")) module.moduleReview = stringValue(updates.moduleReview);
+    if (hasOwn(updates, "nextActions")) module.nextActions = stringValue(updates.nextActions);
+    modules[moduleIndex] = {
+      ...module,
+      ...buildMockExamModuleStats(module),
+    };
+  }
+
+  const nextBlock = {
+    ...block,
+    wholeConclusion: hasOwn(updates, "wholeConclusion") ? stringValue(updates.wholeConclusion) : block.wholeConclusion,
+    modules,
+    setReview: hasOwn(updates, "setReview") ? stringValue(updates.setReview) : block.setReview,
+    nextActions: hasOwn(updates, "mockNextActions") ? stringValue(updates.mockNextActions) : block.nextActions,
+  };
+  const summary = buildMockExamSummary(modules, nextBlock);
+  syncDataviewFieldInRange(lines, range, "总题数", summary.total, 3);
+  syncDataviewFieldInRange(lines, range, "正确数", summary.correct, 3);
+  syncDataviewFieldInRange(lines, range, "错题数", summary.wrong, 3);
+  syncDataviewFieldInRange(lines, range, "正确率", summary.accuracy, 3);
+  syncDataviewFieldInRange(lines, range, "用时", summary.duration, 3);
+  if (hasOwn(updates, "wholeConclusion")) {
+    updateHeadingSubsection(lines, range, "整卷结论", 3, nextBlock.wholeConclusion);
+  }
+  if (hasOwn(updates, "setReview")) {
+    updateHeadingSubsection(lines, range, "本套复盘", 3, nextBlock.setReview);
+  }
+  if (hasOwn(updates, "mockNextActions")) {
+    updateHeadingSubsection(lines, range, "下套动作", 3, nextBlock.nextActions);
+  }
+  if (moduleIndex >= 0) {
+    syncMockExamModuleBlock(lines, range, modules[moduleIndex]);
+  }
+  const nextMarkdown = lines.join("\n");
+  return { changed: nextMarkdown !== source, markdown: nextMarkdown, summary };
+}
+
+function syncMockExamModuleBlock(lines, reviewRange, module) {
+  const moduleRange = findHeadingRangeInRange(lines, module.type, 3, reviewRange);
+  if (!moduleRange) return false;
+  const stats = buildMockExamModuleStats(module);
+  let changed = false;
+  if (syncDataviewFieldInRange(lines, moduleRange, "总题数", stats.total, 4)) changed = true;
+  if (syncDataviewFieldInRange(lines, moduleRange, "正确数", stats.correct, 4)) changed = true;
+  if (syncDataviewFieldInRange(lines, moduleRange, "错题数", stats.wrong, 4)) changed = true;
+  if (syncDataviewFieldInRange(lines, moduleRange, "正确率", stats.accuracy, 4)) changed = true;
+  if (syncDataviewFieldInRange(lines, moduleRange, "用时", stats.duration, 4)) changed = true;
+  if (hasOwn(module, "causeDistribution")) {
+    const body = ["", ...normalizeCauseDistribution(module.causeDistribution).map((item) => `- ${item.cause}：${item.count}`), ""];
+    if (updateHeadingSubsection(lines, moduleRange, "错因分布", 4, body)) changed = true;
+  }
+  if (hasOwn(module, "representativeProblems") && updateHeadingSubsection(lines, moduleRange, "代表题", 4, module.representativeProblems || "第 题：")) {
+    changed = true;
+  }
+  if (hasOwn(module, "moduleReview") && updateHeadingSubsection(lines, moduleRange, "本模块复盘", 4, module.moduleReview)) {
+    changed = true;
+  }
+  if (hasOwn(module, "nextActions") && updateHeadingSubsection(lines, moduleRange, "下次动作", 4, module.nextActions || "- [ ]")) {
+    changed = true;
+  }
+  return changed;
+}
+
+function syncDataviewFieldInRange(lines, range, fieldName, value, stopHeadingLevel) {
+  const nextLine = `${fieldName}:: ${stringValue(value)}`;
+  const pattern = new RegExp(`^${escapeRegex(fieldName)}::`);
+  const end = findReviewFieldBoundary(lines, range, stopHeadingLevel);
+  for (let index = range.start + 1; index < end; index += 1) {
+    if (pattern.test(lines[index].trim())) {
+      if (lines[index] === nextLine) return false;
+      lines[index] = nextLine;
+      return true;
+    }
+  }
+
+  lines.splice(end, 0, nextLine);
+  range.end += 1;
+  return true;
+}
+
+function updateHeadingSubsection(lines, parentRange, heading, level, value) {
+  const range = findHeadingRangeInRange(lines, heading, level, parentRange);
+  if (!range) return false;
+  const bodyLines = Array.isArray(value)
+    ? value
+    : ["", ...trimOuterBlankLines(stringValue(value).split(/\r?\n/)), ""];
+  const current = lines.slice(range.start + 1, range.end);
+  if (arraysEqual(current, bodyLines)) return false;
+  lines.splice(range.start + 1, range.end - range.start - 1, ...bodyLines);
+  parentRange.end += bodyLines.length - current.length;
+  return true;
+}
+
+function findHeadingRangeInRange(lines, heading, level, parentRange) {
+  const marker = "#".repeat(level);
+  let start = -1;
+  for (let index = parentRange.start + 1; index < parentRange.end; index += 1) {
+    if (lines[index].trim() === `${marker} ${heading}`) {
+      start = index;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  let end = parentRange.end;
+  for (let index = start + 1; index < parentRange.end; index += 1) {
+    const match = lines[index].trim().match(/^(#{1,6})\s+/);
+    if (match && match[1].length <= level) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
 }
 
 function getMistakeReviewBlockAtLine(markdown, cursorLine) {
@@ -720,6 +1164,40 @@ function parseCauseDistribution(lines) {
   return distribution;
 }
 
+function parseHeadingCauseDistribution(lines, level) {
+  const range = findHeadingRange(lines, "错因分布", level);
+  if (!range) return [{ cause: "未分类", count: "" }];
+  const distribution = [];
+  for (const line of lines.slice(range.start + 1, range.end)) {
+    const match = line.trim().match(/^-+\s*(.+?)：\s*(.*?)\s*$/);
+    if (match) {
+      distribution.push({ cause: match[1].trim(), count: match[2].trim() });
+    }
+  }
+  return normalizeCauseDistribution(distribution);
+}
+
+function readHeadingSubsection(lines, heading, level) {
+  const range = findHeadingRange(lines, heading, level);
+  if (!range) return "";
+  return trimOuterBlankLines(lines.slice(range.start + 1, range.end)).join("\n");
+}
+
+function findHeadingRange(lines, heading, level) {
+  const marker = "#".repeat(level);
+  const start = lines.findIndex((line) => line.trim() === `${marker} ${heading}`);
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const match = lines[index].trim().match(/^(#{1,6})\s+/);
+    if (match && match[1].length <= level) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
 function splitCauseCategories(value) {
   return stringValue(value)
     .split(/[,，、]/)
@@ -780,7 +1258,10 @@ function parsePlan(section) {
     .split(/\r?\n/)
     .map((line) => line.match(/^- \[([ xX])\]\s*(.*)$/))
     .filter(Boolean)
-    .map((match) => ({ checked: match[1].toLowerCase() === "x", text: match[2].trim() }));
+    .map((match) => ({
+      checked: match[1].toLowerCase() === "x",
+      text: match[2].trim(),
+    }));
 }
 
 function parsePractice(section, plan = [], date = "") {
@@ -801,12 +1282,14 @@ function parsePractice(section, plan = [], date = "") {
     "错题链接": "mistakeLink",
   };
   const practice = {};
+
   for (const line of section.split(/\r?\n/)) {
     const match = line.match(/^\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
     if (!match) continue;
     const key = fieldMap[match[1].trim()];
     if (key) practice[key] = unescapeTableCell(match[2].trim());
   }
+
   const items = syncPracticeItems(plan);
   if (items[0]) {
     items[0] = {
@@ -817,6 +1300,7 @@ function parsePractice(section, plan = [], date = "") {
       duration: stringValue(practice.studyTime),
     };
   }
+
   return {
     ...practice,
     items,
@@ -910,9 +1394,13 @@ function createChildEl(parent, tag, options = {}) {
   return element;
 }
 
+
 class CivilServiceDashboardPlugin extends Plugin {
   async onload() {
     this.settings = await this.loadSettings();
+    if (typeof this.registerExtensions === "function") {
+      this.registerExtensions(["csd"], "markdown");
+    }
     this.registerView(VIEW_TYPE, (leaf) => new CivilServiceDashboardView(leaf, this));
     this.addSettingTab(new CivilServiceDashboardSettingTab(this.app, this));
 
@@ -940,6 +1428,10 @@ class CivilServiceDashboardPlugin extends Plugin {
 
     this.registerMistakeReviewPostProcessor();
 
+    this.registerEvent(this.app.workspace.on("file-open", async (file) => {
+      await this.openDashboardForLauncher(file);
+    }));
+
     this.registerEvent(this.app.workspace.on("editor-menu", (menu, editor) => {
       const block = getMistakeReviewBlockAtLine(
         typeof editor.getValue === "function" ? editor.getValue() : "",
@@ -954,6 +1446,13 @@ class CivilServiceDashboardPlugin extends Plugin {
           .onClick(() => this.openReviewPropertyModal(editor));
       });
     }));
+  }
+
+  async openDashboardForLauncher(file) {
+    if (!(file instanceof TFile) || !file.path.endsWith(".csd")) return;
+    const text = await this.app.vault.read(file);
+    if (!text.includes("civil-service-dashboard-launcher")) return;
+    await this.openDashboard();
   }
 
   registerMistakeReviewPostProcessor() {
@@ -1197,7 +1696,7 @@ class CivilServiceDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("每日清单模板")
-      .setDesc("一行一个计划项。点击工作台日历按钮创建新日期时，会用这些行生成本日计划。")
+      .setDesc("一行一个计划项。点击工作台日历按钮创建新日期时，只会用这里填写的行生成本日计划；留空则不生成默认计划。")
       .addTextArea((text) => {
         text
           .setPlaceholder("资料分析第 1 套\n资料分析第 2 套\n言语理解第 1 套")
@@ -1232,6 +1731,8 @@ class CivilServiceDashboardView extends ItemView {
     this.currentFile = null;
     this.data = null;
     this.saveTimer = null;
+    this.fileWriteQueues = new Map();
+    this.debouncedReviewSaves = new Map();
     this.lastWrittenText = "";
     this.selectedReviewIndex = 0;
     this.mistakeReviewLoadId = 0;
@@ -1261,6 +1762,8 @@ class CivilServiceDashboardView extends ItemView {
       this.saveTimer = null;
       await this.saveNow();
     }
+    await this.flushDebouncedReviewSaves();
+    await this.flushPendingWrites();
   }
 
   registerVaultListeners() {
@@ -1347,15 +1850,11 @@ class CivilServiceDashboardView extends ItemView {
   async getOrCreateMistakeFile(date, plan = [], practiceItems = []) {
     await this.ensureMistakeFolder();
     const path = buildMistakePath(date);
-    const existing = this.app.vault.getFileByPath(path);
-    if (existing instanceof TFile) {
-      const current = await this.app.vault.read(existing);
-      const synced = ensureMistakePlanSections(current, date, plan, practiceItems);
-      if (synced !== current) {
-        await this.app.vault.modify(existing, synced);
-      }
-      return existing;
-    }
+	    const existing = this.app.vault.getFileByPath(path);
+	    if (existing instanceof TFile) {
+	      await this.enqueueFileUpdate(existing, (current) => ensureMistakePlanSections(current, date, plan, practiceItems));
+	      return existing;
+	    }
     return this.app.vault.create(path, renderMistakeMarkdown(date, plan, practiceItems));
   }
 
@@ -1548,6 +2047,20 @@ class CivilServiceDashboardView extends ItemView {
     addInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") addTask();
     });
+
+    const quickActions = card.createDiv({ cls: "csd-plan-quick-actions" });
+    const addMockButton = quickActions.createEl("button", {
+      cls: "csd-secondary-button csd-add-mock-exam-button",
+      text: "添加行测模考",
+    });
+    addMockButton.addEventListener("click", () => {
+      const text = getNextMockExamTitle(this.data.plan);
+      this.data.plan.push({ text, checked: false });
+      this.data.practice.items = syncPracticeItems(this.data.plan, this.data.practice.items);
+      this.selectedReviewIndex = this.data.plan.length - 1;
+      this.render();
+      this.scheduleSave();
+    });
   }
 
   renderPracticeCard(card) {
@@ -1632,12 +2145,14 @@ class CivilServiceDashboardView extends ItemView {
     this.renderCardHeader(card, "错题复盘卡片", "clipboard-check");
     const sections = buildMistakeSections(this.data.plan);
     if (sections.length === 0) {
+      card.toggleClass("is-mock-exam", false);
       card.createDiv({ cls: "csd-muted", text: "先添加一个本日计划，再填写对应的错题复盘。" });
       this.mistakeReviewLoadPromise = Promise.resolve();
       return;
     }
 
     this.selectedReviewIndex = Math.min(Math.max(0, this.selectedReviewIndex), sections.length - 1);
+    card.toggleClass("is-mock-exam", isMockExamTitle(sections[this.selectedReviewIndex].title));
     const selector = card.createDiv({ cls: "csd-mistake-review-selector" });
     sections.forEach((section, index) => {
       const button = selector.createEl("button", {
@@ -1650,24 +2165,36 @@ class CivilServiceDashboardView extends ItemView {
           ? Array.from(selector.querySelectorAll(".csd-review-selector-button"))
           : [];
         buttons.forEach((item, itemIndex) => item.toggleClass("is-active", itemIndex === index));
-        this.loadMistakeReviewIntoBody(body, index);
+        this.loadMistakeReviewIntoBody(card, body, index);
       });
     });
 
     const body = card.createDiv({ cls: "csd-mistake-review-body" });
-    this.loadMistakeReviewIntoBody(body, this.selectedReviewIndex);
+    this.loadMistakeReviewIntoBody(card, body, this.selectedReviewIndex);
   }
 
-  loadMistakeReviewIntoBody(body, index) {
+  loadMistakeReviewIntoBody(card, body, index) {
     body.empty();
     body.createDiv({ cls: "csd-muted", text: "正在加载复盘卡片..." });
+    const sections = buildMistakeSections(this.data.plan);
+    const currentSection = sections[index];
+    if (card && currentSection) {
+      card.toggleClass("is-mock-exam", isMockExamTitle(currentSection.title));
+    }
     const loadId = this.mistakeReviewLoadId + 1;
     this.mistakeReviewLoadId = loadId;
     this.mistakeReviewLoadPromise = this.loadMistakeReviewBlock(index)
       .then(({ section, block }) => {
         if (loadId !== this.mistakeReviewLoadId) return;
         body.empty();
-        this.renderMistakeReviewEditor(body, index, section, block);
+        if (card) {
+          card.toggleClass("is-mock-exam", Boolean(block && block.isMockExam));
+        }
+        if (block && block.isMockExam) {
+          this.renderMockExamEditor(body, index, section, block);
+        } else {
+          this.renderMistakeReviewEditor(body, index, section, block);
+        }
       })
       .catch(() => {
         if (loadId !== this.mistakeReviewLoadId) return;
@@ -1686,11 +2213,7 @@ class CivilServiceDashboardView extends ItemView {
     const existing = this.app.vault.getFileByPath(path);
     let markdown = "";
     if (existing instanceof TFile) {
-      const current = await this.app.vault.read(existing);
-      markdown = ensureMistakePlanSections(current, date, this.data.plan, this.data.practice.items);
-      if (markdown !== current) {
-        await this.app.vault.modify(existing, markdown);
-      }
+      markdown = await this.enqueueFileUpdate(existing, (current) => ensureMistakePlanSections(current, date, this.data.plan, this.data.practice.items)) || "";
     } else {
       markdown = renderMistakeMarkdown(date, this.data.plan, this.data.practice.items);
     }
@@ -1766,6 +2289,217 @@ class CivilServiceDashboardView extends ItemView {
     this.renderMistakeReviewTextarea(body, "本套复盘", "csd-mistake-review-set-review-input", block.setReview, "setReview", index, "这一套的共性问题、改进方法和下次动作...");
   }
 
+  renderMockExamEditor(body, index, section, block = {}) {
+    const editor = body.createDiv({ cls: "csd-mock-exam-editor" });
+    const titleRow = editor.createDiv({ cls: "csd-mistake-review-title-row" });
+    titleRow.createDiv({ cls: "csd-mistake-review-title", text: section.title });
+    const openButton = titleRow.createEl("button", {
+      cls: "csd-secondary-button csd-mistake-review-open-button",
+      text: "打开 Markdown",
+    });
+    openButton.addEventListener("click", () => this.openPlanMistakeNote(index));
+
+    let currentBlock = {
+      ...block,
+      modules: normalizeMockExamModules(block.modules),
+    };
+    const summary = buildMockExamSummary(currentBlock.modules, currentBlock);
+    const stats = editor.createDiv({ cls: "csd-mistake-review-stats csd-mock-overall-stats" });
+    const statNodes = {};
+    [
+      ["total", "总题数", summary.total],
+      ["correct", "正确数", summary.correct],
+      ["wrong", "错题数", summary.wrong],
+      ["accuracy", "正确率", summary.accuracy || "0%"],
+      ["duration", "用时", summary.duration],
+    ].forEach(([key, label, value]) => {
+      const item = stats.createDiv({ cls: "csd-mistake-review-stat" });
+      item.createSpan({ text: label });
+      statNodes[key] = item.createEl("strong", {
+        cls: key === "accuracy" ? "csd-mock-overall-accuracy" : "",
+        text: value || "-",
+      });
+    });
+
+    const updateOverallStats = (nextBlock) => {
+      const nextSummary = buildMockExamSummary(nextBlock.modules, nextBlock);
+      statNodes.total.setText(nextSummary.total || "-");
+      statNodes.correct.setText(nextSummary.correct || "-");
+      statNodes.wrong.setText(nextSummary.wrong || "-");
+      statNodes.accuracy.setText(nextSummary.accuracy || "0%");
+      statNodes.duration.setText(nextSummary.duration || "-");
+    };
+
+    const workspace = editor.createDiv({ cls: "csd-mock-exam-workspace" });
+    const modulePanel = workspace.createDiv({ cls: "csd-mock-module-panel" });
+    const table = modulePanel.createDiv({ cls: "csd-mock-module-table" });
+    let selectedModuleType = currentBlock.modules[0] && currentBlock.modules[0].type;
+    const detailPanel = workspace.createDiv({ cls: "csd-mock-detail-panel" });
+    const detail = detailPanel.createDiv({ cls: "csd-mock-module-detail" });
+    const moduleRows = new Map();
+    const syncModuleActiveState = () => {
+      moduleRows.forEach((row, type) => {
+        row.toggleClass("is-active", type === selectedModuleType);
+      });
+    };
+    const renderSelectedDetail = () => {
+      syncModuleActiveState();
+      const module = currentBlock.modules.find((item) => item.type === selectedModuleType) || currentBlock.modules[0];
+      this.renderMockModuleDetail(detail, index, module, (nextBlock) => {
+        currentBlock = nextBlock;
+        updateOverallStats(currentBlock);
+      });
+    };
+
+    currentBlock.modules.forEach((module) => {
+      const row = table.createDiv({ cls: "csd-mock-module-row" });
+      moduleRows.set(module.type, row);
+      const name = row.createEl("button", {
+        cls: "csd-mock-module-name",
+        text: module.type,
+        attr: { type: "button" },
+      });
+      name.addEventListener("click", () => {
+        selectedModuleType = module.type;
+        renderSelectedDetail();
+      });
+
+      const totalField = this.createMockModuleInput(row, "总题数", "csd-mock-module-total-input", module.total, "number");
+      const correctField = this.createMockModuleInput(row, "正确数", "csd-mock-module-correct-input", module.correct, "number");
+      const accuracyField = row.createDiv({ cls: "csd-practice-field" });
+      accuracyField.createEl("label", { text: "正确率" });
+      const accuracyValue = accuracyField.createDiv({
+        cls: "csd-readonly-value csd-mock-module-accuracy-value",
+        text: module.accuracy || "0%",
+      });
+      const durationField = this.createMockModuleInput(row, "用时", "csd-mock-module-duration-input", module.duration, "text");
+      const updateModule = async () => {
+        const nextBlock = await this.scheduleDebouncedReviewSave(`mock:${index}:${module.type}:stats`, () => this.saveMockExamReviewUpdates(index, {
+          moduleType: module.type,
+          total: totalField.input.value,
+          correct: correctField.input.value,
+          duration: durationField.input.value,
+        }));
+        if (!nextBlock) return;
+        currentBlock = nextBlock;
+        const updatedModule = currentBlock.modules.find((item) => item.type === module.type) || module;
+        accuracyValue.setText(updatedModule.accuracy || "0%");
+        updateOverallStats(currentBlock);
+        if (selectedModuleType === module.type) renderSelectedDetail();
+      };
+      totalField.input.addEventListener("input", updateModule);
+      correctField.input.addEventListener("input", updateModule);
+      durationField.input.addEventListener("input", updateModule);
+    });
+
+    renderSelectedDetail();
+  }
+
+  createMockModuleInput(row, label, className, value, type) {
+    const field = row.createDiv({ cls: "csd-practice-field" });
+    field.createEl("label", { text: label });
+    const input = field.createEl("input", {
+      cls: `csd-text-input ${className}`,
+      attr: { type, placeholder: type === "number" ? "0" : "120min" },
+    });
+    input.value = value || "";
+    return { field, input };
+  }
+
+  renderMockModuleDetail(detail, index, module, onUpdated) {
+    detail.empty();
+    detail.createDiv({ cls: "csd-mock-module-detail-title", text: `${module.type}复盘` });
+    const taxonomy = this.plugin.getMistakeTaxonomy();
+    const causeField = detail.createDiv({ cls: "csd-mistake-review-field" });
+    causeField.createEl("label", { text: "错因分类" });
+    const causeList = causeField.createDiv({ cls: "csd-mistake-review-cause-list" });
+    const selectedCauses = new Set(
+      normalizeCauseDistribution(module.causeDistribution)
+        .map((item) => item.cause)
+        .filter((cause) => cause !== "未分类")
+    );
+    const saveCauseDistribution = async (distribution) => {
+      const nextBlock = await this.saveMockExamReviewUpdates(index, {
+        moduleType: module.type,
+        causeDistribution: distribution,
+      });
+      if (nextBlock) {
+        const nextModule = nextBlock.modules.find((item) => item.type === module.type) || module;
+        onUpdated(nextBlock);
+        this.renderMockModuleDetail(detail, index, nextModule, onUpdated);
+      }
+    };
+
+    getMistakeCauseOptions(module.type, taxonomy).forEach((cause) => {
+      const chip = causeList.createEl("button", {
+        cls: "csd-mock-cause-chip csd-mistake-review-cause-chip",
+        text: cause,
+      });
+      chip.toggleClass("is-selected", selectedCauses.has(cause));
+      chip.addEventListener("click", async () => {
+        const distribution = normalizeCauseDistribution(module.causeDistribution)
+          .filter((item) => item.cause !== "未分类");
+        const exists = distribution.some((item) => item.cause === cause);
+        const nextDistribution = exists
+          ? distribution.filter((item) => item.cause !== cause)
+          : [...distribution, { cause, count: "" }];
+        await saveCauseDistribution(nextDistribution);
+      });
+    });
+
+    const counts = detail.createDiv({ cls: "csd-mock-cause-counts" });
+    normalizeCauseDistribution(module.causeDistribution)
+      .filter((item, _, list) => item.cause !== "未分类" || list.length === 1)
+      .forEach((item) => {
+        const row = counts.createDiv({ cls: "csd-mock-cause-count-row" });
+        row.createSpan({ text: item.cause });
+        const input = row.createEl("input", {
+          cls: "csd-text-input csd-mock-cause-count-input",
+          attr: { type: "number", placeholder: "次数" },
+        });
+        input.value = item.count || "";
+        input.addEventListener("input", async () => {
+          const nextDistribution = normalizeCauseDistribution(module.causeDistribution)
+            .map((causeItem) => causeItem.cause === item.cause ? { ...causeItem, count: input.value } : causeItem);
+          await saveCauseDistribution(nextDistribution);
+        });
+      });
+
+    this.renderMockTextarea(detail, "代表题", "csd-mock-representative-input", module.representativeProblems, async (value) => {
+      const nextBlock = await this.saveMockExamReviewUpdates(index, {
+        moduleType: module.type,
+        representativeProblems: value,
+      });
+      if (nextBlock) onUpdated(nextBlock);
+    }, `mock:${index}:${module.type}:representativeProblems`);
+    this.renderMockTextarea(detail, "本模块复盘", "csd-mock-module-review-input", module.moduleReview, async (value) => {
+      const nextBlock = await this.saveMockExamReviewUpdates(index, {
+        moduleType: module.type,
+        moduleReview: value,
+      });
+      if (nextBlock) onUpdated(nextBlock);
+    }, `mock:${index}:${module.type}:moduleReview`);
+    this.renderMockTextarea(detail, "下次动作", "csd-mock-next-actions-input", module.nextActions, async (value) => {
+      const nextBlock = await this.saveMockExamReviewUpdates(index, {
+        moduleType: module.type,
+        nextActions: value,
+      });
+      if (nextBlock) onUpdated(nextBlock);
+    }, `mock:${index}:${module.type}:nextActions`);
+  }
+
+  renderMockTextarea(parent, label, className, value, onInput, saveKey = className) {
+    const field = parent.createDiv({ cls: "csd-mistake-review-field" });
+    field.createEl("label", { text: label });
+    const textarea = field.createEl("textarea", {
+      cls: `csd-review-textarea csd-mistake-review-textarea ${className}`,
+    });
+    textarea.value = value || "";
+    textarea.addEventListener("input", async () => {
+      await this.scheduleDebouncedReviewSave(saveKey, () => onInput(textarea.value));
+    });
+  }
+
   renderMistakeReviewTextarea(parent, label, className, value, updateKey, index, placeholder) {
     const field = parent.createDiv({ cls: "csd-mistake-review-field" });
     field.createEl("label", { text: label });
@@ -1775,8 +2509,76 @@ class CivilServiceDashboardView extends ItemView {
     });
     textarea.value = value || "";
     textarea.addEventListener("input", async () => {
-      await this.saveMistakeReviewUpdates(index, { [updateKey]: textarea.value });
+      await this.scheduleDebouncedReviewSave(`review:${index}:${updateKey}`, () => this.saveMistakeReviewUpdates(index, { [updateKey]: textarea.value }));
     });
+  }
+
+  scheduleDebouncedReviewSave(key, saveFn) {
+    const existing = this.debouncedReviewSaves.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const entry = { timer: null, resolve, saveFn };
+      const timer = setTimeout(async () => {
+        this.debouncedReviewSaves.delete(key);
+        try {
+          resolve(await saveFn());
+        } catch (error) {
+          new Notice("复盘保存失败，请稍后重试");
+          resolve(null);
+        }
+      }, 300);
+      entry.timer = timer;
+      this.debouncedReviewSaves.set(key, entry);
+    });
+  }
+
+  async flushDebouncedReviewSaves() {
+    const entries = Array.from(this.debouncedReviewSaves.values());
+    this.debouncedReviewSaves.clear();
+    await Promise.all(entries.map(async (entry) => {
+      clearTimeout(entry.timer);
+      try {
+        entry.resolve(await entry.saveFn());
+      } catch (error) {
+        new Notice("复盘保存失败，请稍后重试");
+        entry.resolve(null);
+      }
+    }));
+  }
+
+  async enqueueFileUpdate(file, updater) {
+    const key = file.path;
+    const previous = this.fileWriteQueues.get(key) || Promise.resolve();
+    const queued = previous.catch(() => null).then(async () => {
+      const current = await this.app.vault.read(file);
+      const next = await updater(current);
+      if (typeof next === "string" && next !== current) {
+        await this.app.vault.modify(file, next);
+      }
+      return typeof next === "string" ? next : current;
+    });
+
+    this.fileWriteQueues.set(key, queued);
+    queued.finally(() => {
+      if (this.fileWriteQueues.get(key) === queued) {
+        this.fileWriteQueues.delete(key);
+      }
+    }).catch(() => null);
+
+    try {
+      return await queued;
+    } catch (error) {
+      new Notice(`保存失败：${file.path}`);
+      return null;
+    }
+  }
+
+  async flushPendingWrites() {
+    await Promise.all(Array.from(this.fileWriteQueues.values()).map((promise) => promise.catch(() => null)));
   }
 
   async saveMistakeReviewUpdates(index, updates) {
@@ -1787,11 +2589,42 @@ class CivilServiceDashboardView extends ItemView {
     if (!section) return;
 
     const file = await this.getOrCreateMistakeFile(date, this.data.plan, this.data.practice.items);
-    const current = await this.app.vault.read(file);
-    const updated = updateMistakeReviewBlock(current, section.title, updates, this.plugin.getMistakeTaxonomy());
-    if (updated.changed) {
-      await this.app.vault.modify(file, updated.markdown);
+    await this.enqueueFileUpdate(file, (current) => {
+      const updated = updateMistakeReviewBlock(current, section.title, updates, this.plugin.getMistakeTaxonomy());
+      return updated.changed ? updated.markdown : current;
+    });
+  }
+
+  async saveMockExamReviewUpdates(index, updates) {
+    if (!this.currentFile || !this.data) return null;
+    const date = this.data.date || dateFromPath(this.currentFile.path) || formatDate(new Date());
+    const sections = buildMistakeSections(this.data.plan);
+    const section = sections[index];
+    if (!section) return null;
+
+    const file = await this.getOrCreateMistakeFile(date, this.data.plan, this.data.practice.items);
+    let nextMarkdown = "";
+    await this.enqueueFileUpdate(file, (current) => {
+      const updated = updateMockExamReviewBlock(current, section.title, updates);
+      nextMarkdown = updated.markdown;
+      return updated.changed ? updated.markdown : current;
+    });
+    if (!nextMarkdown) return null;
+    const block = parseMockExamReviewBlocks(nextMarkdown).find((item) => item.title === section.title);
+    if (block) {
+      const summary = buildMockExamSummary(block.modules, block);
+      this.data.practice.items[index] = {
+        text: stringValue(this.data.plan[index] && this.data.plan[index].text),
+        total: summary.total,
+        correct: summary.correct,
+        accuracy: summary.accuracy || calculateAccuracy(summary.total, summary.correct),
+        duration: summary.duration,
+      };
+      this.updateHeaderMetrics();
+      this.scheduleSave();
+      return { ...block, ...summary, modules: normalizeMockExamModules(block.modules) };
     }
+    return null;
   }
 
   renderReviewCard(card) {
@@ -1862,15 +2695,19 @@ class CivilServiceDashboardView extends ItemView {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveNow();
+      this.saveNow().catch(() => null);
     }, 300);
   }
 
   async saveNow() {
     if (!this.currentFile || !this.data) return;
-    const markdown = renderDailyMarkdown(this.data);
-    this.lastWrittenText = markdown;
-    await this.app.vault.modify(this.currentFile, markdown);
+    const file = this.currentFile;
+    const written = await this.enqueueFileUpdate(file, (current) => {
+      const markdown = renderDailyMarkdown(this.data, current);
+      this.lastWrittenText = markdown;
+      return markdown;
+    });
+    if (written) this.lastWrittenText = written;
   }
 }
 
